@@ -86,7 +86,11 @@ func (d *intDecoder) Decode(ctx *RuntimeContext, cursor, depth int64, p unsafe.P
 			return d.decodeSlow(ctx, start, depth, p)
 		}
 	}
-	d.op(p, i64)
+	if d.kind == reflect.Int64 {
+		*(*int64)(p) = i64
+	} else {
+		d.op(p, i64)
+	}
 	return next, nil
 }
 
