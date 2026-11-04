@@ -211,55 +211,71 @@ func (d *sliceDecoder) tryFlatInt64s(ctx *RuntimeContext, cursor, depth int64, p
 		}
 		return cursor + 1, nil, true
 	}
-	vals, end, ok := parseFlatInt64s(buf, cursor)
+	n, end, ok := countFlatInt64s(buf, cursor)
 	if !ok {
 		return 0, nil, false
 	}
-	n := len(vals)
 	if dst.cap < n {
-		*dst = *(*sliceHeader)(unsafe.Pointer(&vals))
+		s := make([]int64, n)
+		*dst = *(*sliceHeader)(unsafe.Pointer(&s))
 	}
 	dst.len = n
-	if dst.cap >= n && dst.data != (*sliceHeader)(unsafe.Pointer(&vals)).data {
-		copy(unsafe.Slice((*int64)(dst.data), n), vals)
-	}
-	return end, nil, true
-}
-
-// parseFlatInt64s parses a flat array of int64s from its first element.
-// A number which is not an integer of int64, or any other value, is not parsed: decode handles it.
-func parseFlatInt64s(buf []byte, cursor int64) ([]int64, int64, bool) {
-	out := make([]int64, 0, 8)
-	for {
+	elem := dst.data
+	for i := range n {
 		cursor = skipWhiteSpace(buf, cursor)
 		neg := buf[cursor] == '-'
 		if neg {
 			cursor++
 		}
-		if buf[cursor]-'0' > 9 {
-			return nil, 0, false
-		}
 		u, next, digits := parseDigits(buf, cursor)
 		if isFloatContinuation(buf[next]) || digits > maxUint64Digits || (neg && u > 1<<63) || (!neg && u > 1<<63-1) {
-			return nil, 0, false
-		}
-		if buf[next]-'0' <= 9 {
-			return nil, 0, false
+			return 0, nil, false
 		}
 		v := int64(u)
 		if neg {
 			v = -v
 		}
-		out = append(out, v)
+		*(*int64)(unsafe.Add(elem, uintptr(i)*8)) = v
 		cursor = skipWhiteSpace(buf, next)
+		if i+1 < n {
+			cursor++
+		}
+	}
+	return end, nil, true
+}
+
+// countFlatInt64s counts a flat array of integers from its first element and returns the position after ']'.
+// A float, a leading zero, or any other value is not counted: decode handles it.
+func countFlatInt64s(buf []byte, cursor int64) (int, int64, bool) {
+	n := 0
+	for {
+		cursor = skipWhiteSpace(buf, cursor)
+		if buf[cursor] == '-' {
+			cursor++
+		}
+		if buf[cursor]-'0' > 9 {
+			return 0, 0, false
+		}
+		if buf[cursor] == '0' {
+			cursor++
+		} else {
+			for buf[cursor]-'0' <= 9 {
+				cursor++
+			}
+		}
+		if isFloatContinuation(buf[cursor]) {
+			return 0, 0, false
+		}
+		n++
+		cursor = skipWhiteSpace(buf, cursor)
 		switch buf[cursor] {
 		case ',':
 			cursor++
 			continue
 		case ']':
-			return out, cursor + 1, true
+			return n, cursor + 1, true
 		default:
-			return nil, 0, false
+			return 0, 0, false
 		}
 	}
 }
