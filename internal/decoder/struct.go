@@ -151,7 +151,7 @@ func (d *structDecoder) Decode(ctx *RuntimeContext, cursor, depth int64, p unsaf
 				}
 				cursor = c
 			} else {
-				c, err = decodeMatched(ctx, field.dec, cursor, depth, unsafe.Add(p, field.offset))
+				c, err = field.dec.Decode(ctx, cursor, depth, unsafe.Add(p, field.offset))
 				if err != nil {
 					return 0, err
 				}
@@ -320,20 +320,6 @@ func matchNextKey(buf []byte, cursor int64, f *structFieldSet) (int64, bool) {
 	}
 	end := start + f.keyLen
 	return end + 1, true
-}
-
-// decodeMatched calls the concrete decoder of a field so the common ones are direct calls.
-func decodeMatched(ctx *RuntimeContext, dec Decoder, cursor, depth int64, p unsafe.Pointer) (int64, error) {
-	switch d := dec.(type) {
-	case *stringDecoder:
-		return d.Decode(ctx, cursor, depth, p)
-	case *intDecoder:
-		return d.Decode(ctx, cursor, depth, p)
-	case *boolDecoder:
-		return d.Decode(ctx, cursor, depth, p)
-	default:
-		return dec.Decode(ctx, cursor, depth, p)
-	}
 }
 
 // decodeKey reads the key of an object at cursor, and returns its field or nil, and the position after it.
