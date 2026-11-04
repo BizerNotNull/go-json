@@ -211,38 +211,25 @@ func (d *sliceDecoder) tryFlatInt64s(ctx *RuntimeContext, cursor, depth int64, p
 		}
 		return cursor + 1, nil, true
 	}
-	n, end, ok := countFlatInt64s(buf, cursor)
+	vals, end, ok := parseFlatInt64s(buf, cursor)
 	if !ok {
 		return 0, nil, false
 	}
+	n := len(vals)
 	if dst.cap < n {
-		s := make([]int64, n)
-		*dst = *(*sliceHeader)(unsafe.Pointer(&s))
+		*dst = *(*sliceHeader)(unsafe.Pointer(&vals))
 	}
 	dst.len = n
-	elem := dst.data
-	for i := range n {
-		cursor = skipWhiteSpace(buf, cursor)
-		neg := buf[cursor] == '-'
-		if neg {
-			cursor++
-		}
-		u, next, _ := parseDigits(buf, cursor)
-		v := int64(u)
-		if neg {
-			v = -v
-		}
-		*(*int64)(unsafe.Add(elem, uintptr(i)*8)) = v
-		cursor = skipWhiteSpace(buf, next)
-		cursor++ // ',' or ']'
+	if dst.cap >= n && dst.data != (*sliceHeader)(unsafe.Pointer(&vals)).data {
+		copy(unsafe.Slice((*int64)(dst.data), n), vals)
 	}
 	return end, nil, true
 }
 
-// countFlatInt64s counts the integers of a flat array from its first element, and returns the position after ']'.
-// A number which is not an integer of int64, or any other value, is not counted: decode handles it.
-func countFlatInt64s(buf []byte, cursor int64) (int, int64, bool) {
-	n := 0
+// parseFlatInt64s parses a flat array of int64s from its first element.
+// A number which is not an integer of int64, or any other value, is not parsed: decode handles it.
+func parseFlatInt64s(buf []byte, cursor int64) ([]int64, int64, bool) {
+	out := make([]int64, 0, 8)
 	for {
 		cursor = skipWhiteSpace(buf, cursor)
 		neg := buf[cursor] == '-'
@@ -250,26 +237,29 @@ func countFlatInt64s(buf []byte, cursor int64) (int, int64, bool) {
 			cursor++
 		}
 		if buf[cursor]-'0' > 9 {
-			return 0, 0, false
+			return nil, 0, false
 		}
 		u, next, digits := parseDigits(buf, cursor)
 		if isFloatContinuation(buf[next]) || digits > maxUint64Digits || (neg && u > 1<<63) || (!neg && u > 1<<63-1) {
-			return 0, 0, false
+			return nil, 0, false
 		}
-		// a leading zero is one digit: the byte after it is not a digit, which the comma or the bracket is
 		if buf[next]-'0' <= 9 {
-			return 0, 0, false
+			return nil, 0, false
 		}
-		n++
+		v := int64(u)
+		if neg {
+			v = -v
+		}
+		out = append(out, v)
 		cursor = skipWhiteSpace(buf, next)
 		switch buf[cursor] {
 		case ',':
 			cursor++
 			continue
 		case ']':
-			return n, cursor + 1, true
+			return out, cursor + 1, true
 		default:
-			return 0, 0, false
+			return nil, 0, false
 		}
 	}
 }
