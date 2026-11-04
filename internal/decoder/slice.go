@@ -180,6 +180,101 @@ func (d *sliceDecoder) store(dst *sliceHeader, buf *sliceBuf, n int) {
 }
 
 func (d *sliceDecoder) Decode(ctx *RuntimeContext, cursor, depth int64, p unsafe.Pointer) (int64, error) {
+	if dec, ok := d.valueDecoder.(*intDecoder); ok && dec.kind == reflect.Int64 && d.size == 8 {
+		if c, err, ok := d.tryFlatInt64s(ctx, cursor, depth, p); ok {
+			return c, err
+		}
+	}
+	return d.decode(ctx, cursor, depth, p)
+}
+
+// tryFlatInt64s decodes a flat array of integers which fit in int64, into one array of their length.
+// Anything else is left to decode, which it does not run: it writes the slice only when the array is such.
+func (d *sliceDecoder) tryFlatInt64s(ctx *RuntimeContext, cursor, depth int64, p unsafe.Pointer) (int64, error, bool) {
+	buf := ctx.Buf
+	cursor = skipWhiteSpace(buf, cursor)
+	if buf[cursor] != '[' {
+		return 0, nil, false
+	}
+	depth++
+	if depth > maxDecodeNestingDepth {
+		return 0, errors.ErrExceededMaxDepth(buf[cursor], cursor), true
+	}
+	cursor++
+	cursor = skipWhiteSpace(buf, cursor)
+	dst := (*sliceHeader)(p)
+	if buf[cursor] == ']' {
+		if dst.data == nil {
+			dst.data = unsafe.Pointer(&zeroBase)
+		} else {
+			dst.len = 0
+		}
+		return cursor + 1, nil, true
+	}
+	n, end, ok := countFlatInt64s(buf, cursor)
+	if !ok {
+		return 0, nil, false
+	}
+	if dst.cap < n {
+		s := make([]int64, n)
+		*dst = *(*sliceHeader)(unsafe.Pointer(&s))
+	}
+	dst.len = n
+	elem := dst.data
+	for i := range n {
+		cursor = skipWhiteSpace(buf, cursor)
+		neg := buf[cursor] == '-'
+		if neg {
+			cursor++
+		}
+		u, next, _ := parseDigits(buf, cursor)
+		v := int64(u)
+		if neg {
+			v = -v
+		}
+		*(*int64)(unsafe.Add(elem, uintptr(i)*8)) = v
+		cursor = skipWhiteSpace(buf, next)
+		cursor++ // ',' or ']'
+	}
+	return end, nil, true
+}
+
+// countFlatInt64s counts the integers of a flat array from its first element, and returns the position after ']'.
+// A number which is not an integer of int64, or any other value, is not counted: decode handles it.
+func countFlatInt64s(buf []byte, cursor int64) (int, int64, bool) {
+	n := 0
+	for {
+		cursor = skipWhiteSpace(buf, cursor)
+		neg := buf[cursor] == '-'
+		if neg {
+			cursor++
+		}
+		if buf[cursor]-'0' > 9 {
+			return 0, 0, false
+		}
+		u, next, digits := parseDigits(buf, cursor)
+		if isFloatContinuation(buf[next]) || digits > maxUint64Digits || (neg && u > 1<<63) || (!neg && u > 1<<63-1) {
+			return 0, 0, false
+		}
+		// a leading zero is one digit: the byte after it is not a digit, which the comma or the bracket is
+		if buf[next]-'0' <= 9 {
+			return 0, 0, false
+		}
+		n++
+		cursor = skipWhiteSpace(buf, next)
+		switch buf[cursor] {
+		case ',':
+			cursor++
+			continue
+		case ']':
+			return n, cursor + 1, true
+		default:
+			return 0, 0, false
+		}
+	}
+}
+
+func (d *sliceDecoder) decode(ctx *RuntimeContext, cursor, depth int64, p unsafe.Pointer) (int64, error) {
 	buf := ctx.Buf
 	for {
 		switch buf[cursor] {
