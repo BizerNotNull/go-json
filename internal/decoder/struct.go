@@ -16,7 +16,7 @@ type structFieldSet struct {
 	fieldIdx    int
 	key         string
 	keyLen      int64
-	// keyWord and keyMask are the little-endian word of a key shorter than 8 bytes, and the mask of those bytes.
+	// keyWord and keyMask include a short key and its closing quote in little-endian order.
 	// keyMask is 0 when matchNextKey must not try this field.
 	keyWord uint64
 	keyMask uint64
@@ -65,8 +65,8 @@ func (d *structDecoder) setFields(fields []*structFieldSet) {
 			for i := range n {
 				w |= uint64(field.key[i]) << (8 * uint(i))
 			}
-			field.keyWord = w
-			field.keyMask = 1<<(8*uint(n)) - 1
+			field.keyWord = w | uint64('"')<<(8*uint(n))
+			field.keyMask = ^uint64(0) >> (8 * uint(7-n))
 		}
 		folded := string(appendFoldedKey(nil, []byte(field.key)))
 		idx, exists := indexByFolded[folded]
@@ -312,16 +312,13 @@ func matchNextKey(buf []byte, cursor int64, f *structFieldSet) (int64, bool) {
 		return 0, false
 	}
 	start := cursor + 1
-	if start+8 > int64(cap(buf)) {
+	if start+8 > int64(cap(buf)) || start+f.keyLen >= int64(len(buf)) {
 		return 0, false
 	}
 	if load64(buf, start)&f.keyMask != f.keyWord {
 		return 0, false
 	}
 	end := start + f.keyLen
-	if buf[end] != '"' {
-		return 0, false
-	}
 	return end + 1, true
 }
 
