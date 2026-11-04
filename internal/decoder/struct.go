@@ -164,6 +164,15 @@ func (d *structDecoder) Decode(ctx *RuntimeContext, cursor, depth int64, p unsaf
 			}
 			cursor = c
 		}
+		// Compact input, which most input is, has the separator right after the value: only another byte
+		// takes the whitespace scan.
+		if c := buf[cursor]; c == ',' {
+			cursor++
+			continue
+		} else if c == '}' {
+			cursor++
+			return cursor, nil
+		}
 		cursor = skipWhiteSpace(buf, cursor)
 		if char(b, cursor) == '}' {
 			cursor++

@@ -392,6 +392,14 @@ func (d *sliceDecoder) decode(ctx *RuntimeContext, cursor, depth int64, p unsafe
 					dst.len = idx + 1
 					return 0, err
 				}
+				if sep := buf[c]; sep == ']' {
+					dst.len = idx + 1
+					return c + 1, nil
+				} else if sep == ',' {
+					idx++
+					cursor = c + 1
+					continue
+				}
 				cursor = skipWhiteSpace(buf, c)
 				switch buf[cursor] {
 				case ']':
