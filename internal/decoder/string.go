@@ -46,6 +46,12 @@ func (d *stringDecoder) Decode(ctx *RuntimeContext, cursor, depth int64, p unsaf
 	)
 	buf := ctx.Buf
 	if start := skipWhiteSpace(buf, cursor); buf[start] == '"' {
+		// A string without an escape or a byte which is not ASCII is most of them: it is found by the same
+		// words as the field scan, which is then not entered.
+		if end := plainStringEnd(buf, start+1); end >= 0 {
+			**(**string)(unsafe.Pointer(&p)) = ctx.makeString(buf[start+1 : end])
+			return end + 1, nil
+		}
 		s, c, ok, err = d.decodeStringField(ctx, start+1)
 	} else {
 		s, c, ok, err = d.decodeStringValue(ctx, cursor)
