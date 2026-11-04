@@ -376,12 +376,16 @@ func (d *sliceDecoder) decode(ctx *RuntimeContext, cursor, depth int64, p unsafe
 			// decoded into, the ones after its length too, as encoding/json does. The elements beyond its capacity
 			// and inPlaceSliceLength are decoded into a buffer ( see decodeLong ).
 			limit := max(dst.cap, inPlaceSliceLength)
+			have := dst.cap
 			idx := 0
 			for {
 				if idx == limit {
 					return d.decodeLong(ctx, cursor, depth, dst, idx)
 				}
-				d.grow(dst, idx, idx+1)
+				if idx >= have {
+					d.grow(dst, idx, idx+1)
+					have = dst.cap
+				}
 				ep := unsafe.Add(dst.data, uintptr(idx)*d.size)
 				c, err := d.valueDecoder.Decode(ctx, cursor, depth, ep)
 				if err != nil {
