@@ -211,6 +211,69 @@ func (d *sliceDecoder) tryFlatInt64s(ctx *RuntimeContext, cursor, depth int64, p
 		}
 		return cursor + 1, nil, true
 	}
+	if _, end, ok := parseFlatInt64sStack(buf, cursor, dst); ok {
+		return end, nil, true
+	}
+	return d.fillCountedInt64s(buf, cursor, dst)
+}
+
+// flatInt64Stack is the longest flat int64 array parsed in one pass on the stack.
+// A longer one is counted, then allocated once ( see fillCountedInt64s ).
+const flatInt64Stack = 256
+
+// parseFlatInt64sStack parses a flat array that fits in the stack into dst.
+// It returns false without writing dst when the array is longer or not a flat int64 array.
+func parseFlatInt64sStack(buf []byte, cursor int64, dst *sliceHeader) (int, int64, bool) {
+	var stack [flatInt64Stack]int64
+	n := 0
+	for {
+		cursor = skipWhiteSpace(buf, cursor)
+		neg := buf[cursor] == '-'
+		dig := cursor
+		if neg {
+			dig++
+		}
+		if buf[dig]-'0' > 9 {
+			return 0, 0, false
+		}
+		if n == flatInt64Stack {
+			return 0, 0, false
+		}
+		u, next, digits := parseDigits(buf, dig)
+		if isFloatContinuation(buf[next]) || digits > maxUint64Digits || (neg && u > 1<<63) || (!neg && u > 1<<63-1) {
+			return 0, 0, false
+		}
+		if buf[dig] == '0' && buf[next]-'0' <= 9 {
+			return 0, 0, false
+		}
+		v := int64(u)
+		if neg {
+			v = -v
+		}
+		stack[n] = v
+		n++
+		cursor = skipWhiteSpace(buf, next)
+		switch buf[cursor] {
+		case ',':
+			cursor++
+			continue
+		case ']':
+			if dst.cap < n {
+				s := make([]int64, n)
+				copy(s, stack[:n])
+				*dst = *(*sliceHeader)(unsafe.Pointer(&s))
+			} else {
+				dst.len = n
+				copy(unsafe.Slice((*int64)(dst.data), n), stack[:n])
+			}
+			return n, cursor + 1, true
+		default:
+			return 0, 0, false
+		}
+	}
+}
+
+func (d *sliceDecoder) fillCountedInt64s(buf []byte, cursor int64, dst *sliceHeader) (int64, error, bool) {
 	n, end, ok := countFlatInt64s(buf, cursor)
 	if !ok {
 		return 0, nil, false
