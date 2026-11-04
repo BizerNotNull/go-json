@@ -211,6 +211,11 @@ func (d *sliceDecoder) tryFlatInt64s(ctx *RuntimeContext, cursor, depth int64, p
 		}
 		return cursor + 1, nil, true
 	}
+	// Existing storage must be filled before growing, and its values survive type errors.
+	// The general decoder preserves both the backing-array aliases and those old elements.
+	if dst.cap != 0 {
+		return 0, nil, false
+	}
 	if _, end, ok := parseFlatInt64sStack(buf, cursor, dst); ok {
 		return end, nil, true
 	}
@@ -258,14 +263,9 @@ func parseFlatInt64sStack(buf []byte, cursor int64, dst *sliceHeader) (int, int6
 			cursor++
 			continue
 		case ']':
-			if dst.cap < n {
-				s := make([]int64, n)
-				copy(s, stack[:n])
-				*dst = *(*sliceHeader)(unsafe.Pointer(&s))
-			} else {
-				dst.len = n
-				copy(unsafe.Slice((*int64)(dst.data), n), stack[:n])
-			}
+			s := make([]int64, n)
+			copy(s, stack[:n])
+			*dst = *(*sliceHeader)(unsafe.Pointer(&s))
 			return n, cursor + 1, true
 		default:
 			return 0, 0, false
@@ -278,11 +278,8 @@ func (d *sliceDecoder) fillCountedInt64s(buf []byte, cursor int64, dst *sliceHea
 	if !ok {
 		return 0, nil, false
 	}
-	if dst.cap < n {
-		s := make([]int64, n)
-		*dst = *(*sliceHeader)(unsafe.Pointer(&s))
-	}
-	dst.len = n
+	s := make([]int64, n)
+	*dst = *(*sliceHeader)(unsafe.Pointer(&s))
 	elem := dst.data
 	for i := range n {
 		cursor = skipWhiteSpace(buf, cursor)
