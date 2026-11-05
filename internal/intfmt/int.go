@@ -146,8 +146,8 @@ func appendUpToEightDigits(out []byte, n uint64) []byte {
 	return append(out, byte(a), byte(a>>8), byte(b), byte(b>>8))
 }
 
-// AppendDecimal appends n in decimal, after a minus sign if negative: a positive number of five digits or more,
-// or any negative one. A number of up to sixteen digits is written by the lookups of its digits, the one of up to
+// AppendDecimal appends n in decimal, after a minus sign if negative.
+// A number of up to sixteen digits is written by the lookups of its digits, the one of up to
 // eight digits as appendUpToEightDigits does, without its call; the digits of a larger one are written where they
 // go in out, from the last, so that nothing is copied: the number of the digits is known first.
 func AppendDecimal(out []byte, n uint64, negative bool) []byte {
@@ -156,7 +156,7 @@ func AppendDecimal(out []byte, n uint64, negative bool) []byte {
 			out = append(out, '-')
 		}
 		if n < 10000 {
-			// a negative number of up to four digits: the positive ones are written by their callers.
+			// Up to four digits; slice loops enter here for positive values too.
 			if n < 10 {
 				return append(out, byte(n+'0'))
 			} else if n < 100 {
@@ -179,6 +179,23 @@ func AppendDecimal(out []byte, n uint64, negative bool) []byte {
 		}
 		a, b := DigitPairs[lo/100], DigitPairs[lo%100]
 		return append(out, byte(a), byte(a>>8), byte(b), byte(b>>8))
+	}
+	if n < 1000000000000 {
+		if negative {
+			out = append(out, '-')
+		}
+		hi, lo := n/100000000, n%100000000
+		if hi < 10 {
+			out = append(out, byte(hi+'0'))
+		} else if hi < 100 {
+			u := DigitPairs[hi]
+			out = append(out, byte(u), byte(u>>8))
+		} else {
+			out = AppendThreeOrFourDigits(out, hi)
+		}
+		c, d := lo/10000, lo%10000
+		a, b, e, f := DigitPairs[c/100], DigitPairs[c%100], DigitPairs[d/100], DigitPairs[d%100]
+		return append(out, byte(a), byte(a>>8), byte(b), byte(b>>8), byte(e), byte(e>>8), byte(f), byte(f>>8))
 	}
 	if n < 10000000000000000 {
 		// up to sixteen digits: the first ones of a division by 100000000 as a number of up to eight digits,

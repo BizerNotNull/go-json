@@ -35,22 +35,21 @@ func numMask(numBitSize uint8) uint64 {
 }
 
 func AppendInt(_ *RuntimeContext, out []byte, p unsafe.Pointer, code *Opcode) []byte {
-	var u64 uint64
+	var signed int64
 	switch code.NumBitSize {
-	case 8:
-		u64 = uint64(*(*uint8)(p))
-	case 16:
-		u64 = uint64(*(*uint16)(p))
-	case 32:
-		u64 = uint64(*(*uint32)(p))
 	case 64:
-		u64 = *(*uint64)(p)
+		signed = *(*int64)(p)
+	case 32:
+		signed = int64(*(*int32)(p))
+	case 16:
+		signed = int64(*(*int16)(p))
+	case 8:
+		signed = int64(*(*int8)(p))
 	}
-	mask := numMask(code.NumBitSize)
-	n := u64 & mask
-	negative := (u64>>(code.NumBitSize-1))&1 == 1
+	negative := signed < 0
+	n := uint64(signed)
 	if negative {
-		n = -n & mask
+		n = -n
 	} else if n < 10 {
 		return append(out, byte(n+'0'))
 	} else if n < 100 {
@@ -84,4 +83,34 @@ func AppendUint(_ *RuntimeContext, out []byte, p unsafe.Pointer, code *Opcode) [
 		return intfmt.AppendThreeOrFourDigits(out, n)
 	}
 	return intfmt.AppendDecimal(out, n, false)
+}
+
+// AppendIntSlice appends a non-empty primitive signed-integer slice and its
+// trailing comma in compact, uncolored output. The element width is selected once.
+func AppendIntSlice(out []byte, data unsafe.Pointer, length int, bitSize uint8) []byte {
+	switch bitSize {
+	case 8:
+		return appendIntegerValues(out, unsafe.Slice((*int8)(data), length))
+	case 16:
+		return appendIntegerValues(out, unsafe.Slice((*int16)(data), length))
+	case 32:
+		return appendIntegerValues(out, unsafe.Slice((*int32)(data), length))
+	default:
+		return appendIntegerValues(out, unsafe.Slice((*int64)(data), length))
+	}
+}
+
+func appendIntegerValues[T int8 | int16 | int32 | int64](out []byte, values []T) []byte {
+	out = append(out, '[')
+	for _, v := range values {
+		n := uint64(v)
+		negative := v < 0
+		if negative {
+			n = -n
+		}
+		out = intfmt.AppendDecimal(out, n, negative)
+		out = append(out, ',')
+	}
+	out[len(out)-1] = ']'
+	return append(out, ',')
 }
