@@ -103,7 +103,12 @@ func AppendIntSlice(out []byte, data unsafe.Pointer, length int, bitSize uint8) 
 func appendIntegerValues[T int8 | int16 | int32 | int64](out []byte, values []T) []byte {
 	out = append(out, '[')
 	for _, v := range values {
-		out = intfmt.AppendInt(out, int64(v))
+		n := uint64(v)
+		negative := v < 0
+		if negative {
+			n = -n
+		}
+		out = intfmt.AppendDecimal(out, n, negative)
 		out = append(out, ',')
 	}
 	out[len(out)-1] = ']'
