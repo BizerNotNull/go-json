@@ -15,6 +15,12 @@ func (v sliceIntegerMarshaler) MarshalJSON() ([]byte, error) {
 	return []byte(`"custom"`), nil
 }
 
+type sliceIntegerPointerMarshaler int32
+
+func (v *sliceIntegerPointerMarshaler) MarshalJSON() ([]byte, error) {
+	return []byte(`"pointer"`), nil
+}
+
 // Slice traversal must preserve element widths, delimiters, nesting and custom
 // methods in every VM, including when the slice follows another encoded value.
 func TestEncodeIntegerSlices(t *testing.T) {
@@ -33,6 +39,7 @@ func TestEncodeIntegerSlices(t *testing.T) {
 		[][]int64{nil, {}, {1}, {-1, 2}},
 		[]*int64{nil, &n},
 		[]sliceIntegerMarshaler{1, 2},
+		[]sliceIntegerPointerMarshaler{1, 2},
 		map[string][]int64{"a": {1, -2}, "b": {}, "c": nil},
 		struct {
 			Before string
