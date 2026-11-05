@@ -603,6 +603,11 @@ func Run(ctx *encoder.RuntimeContext, b []byte, codeSet *encoder.OpcodeSet) ([]b
 			// Primitive integers cannot recurse or call user code. Keep their
 			// slice traversal local instead of dispatching two opcodes per item.
 			if elem := code.Next; slice.Len > 0 && elem.Op == encoder.OpInt {
+				if ctx.Option.Flag&(encoder.IndentOption|encoder.ColorizeOption) == 0 {
+					b = encoder.AppendIntSlice(b, slice.Data, slice.Len, elem.NumBitSize)
+					code = code.End.Next
+					break
+				}
 				step := elem.Next
 				b = appendArrayHead(ctx, code, b)
 				for i := 0; i < slice.Len; i++ {

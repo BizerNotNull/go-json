@@ -84,3 +84,28 @@ func AppendUint(_ *RuntimeContext, out []byte, p unsafe.Pointer, code *Opcode) [
 	}
 	return intfmt.AppendDecimal(out, n, false)
 }
+
+// AppendIntSlice appends a non-empty primitive signed-integer slice and its
+// trailing comma in compact, uncolored output. The element width is selected once.
+func AppendIntSlice(out []byte, data unsafe.Pointer, length int, bitSize uint8) []byte {
+	switch bitSize {
+	case 8:
+		return appendIntegerValues(out, unsafe.Slice((*int8)(data), length))
+	case 16:
+		return appendIntegerValues(out, unsafe.Slice((*int16)(data), length))
+	case 32:
+		return appendIntegerValues(out, unsafe.Slice((*int32)(data), length))
+	default:
+		return appendIntegerValues(out, unsafe.Slice((*int64)(data), length))
+	}
+}
+
+func appendIntegerValues[T int8 | int16 | int32 | int64](out []byte, values []T) []byte {
+	out = append(out, '[')
+	for _, v := range values {
+		out = intfmt.AppendInt(out, int64(v))
+		out = append(out, ',')
+	}
+	out[len(out)-1] = ']'
+	return append(out, ',')
+}

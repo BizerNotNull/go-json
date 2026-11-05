@@ -3,7 +3,7 @@
 ### Performance
 
 * Encode signed integers with width-specific signed loads instead of runtime masks and sign-bit shifts.
-* Traverse primitive signed-integer slices without per-element VM dispatch.
+* Traverse primitive signed-integer slices without per-element VM dispatch, selecting the integer width once for compact output.
 * Format nine-to-twelve-digit integers with a four-digit suffix.
 * Decode in-order short struct keys using precomputed words and call common field decoders directly.
 * Parse short flat int64 arrays in a stack buffer, keeping exact-size allocation for longer arrays.
