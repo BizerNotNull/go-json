@@ -3,6 +3,7 @@
 ### Performance
 
 * Encode signed integers with width-specific signed loads instead of runtime masks and sign-bit shifts.
+* Traverse primitive signed-integer slices without per-element VM dispatch.
 * Decode in-order short struct keys using precomputed words and call common field decoders directly.
 * Parse short flat int64 arrays in a stack buffer, keeping exact-size allocation for longer arrays.
 * Decode small `map[string]int` objects without reflection on 64-bit platforms.
