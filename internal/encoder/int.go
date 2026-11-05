@@ -35,22 +35,21 @@ func numMask(numBitSize uint8) uint64 {
 }
 
 func AppendInt(_ *RuntimeContext, out []byte, p unsafe.Pointer, code *Opcode) []byte {
-	var u64 uint64
+	var signed int64
 	switch code.NumBitSize {
-	case 8:
-		u64 = uint64(*(*uint8)(p))
-	case 16:
-		u64 = uint64(*(*uint16)(p))
-	case 32:
-		u64 = uint64(*(*uint32)(p))
 	case 64:
-		u64 = *(*uint64)(p)
+		signed = *(*int64)(p)
+	case 32:
+		signed = int64(*(*int32)(p))
+	case 16:
+		signed = int64(*(*int16)(p))
+	case 8:
+		signed = int64(*(*int8)(p))
 	}
-	mask := numMask(code.NumBitSize)
-	n := u64 & mask
-	negative := (u64>>(code.NumBitSize-1))&1 == 1
+	negative := signed < 0
+	n := uint64(signed)
 	if negative {
-		n = -n & mask
+		n = -n
 	} else if n < 10 {
 		return append(out, byte(n+'0'))
 	} else if n < 100 {
