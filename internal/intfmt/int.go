@@ -180,6 +180,15 @@ func AppendDecimal(out []byte, n uint64, negative bool) []byte {
 		a, b := DigitPairs[lo/100], DigitPairs[lo%100]
 		return append(out, byte(a), byte(a>>8), byte(b), byte(b>>8))
 	}
+	if n < 1000000000000 {
+		if negative {
+			out = append(out, '-')
+		}
+		hi, lo := n/10000, n%10000
+		out = appendUpToEightDigits(out, hi)
+		a, b := DigitPairs[lo/100], DigitPairs[lo%100]
+		return append(out, byte(a), byte(a>>8), byte(b), byte(b>>8))
+	}
 	if n < 10000000000000000 {
 		// up to sixteen digits: the first ones of a division by 100000000 as a number of up to eight digits,
 		// then the last eight by their lookups.
