@@ -72,6 +72,10 @@ func (d *intDecoder) Decode(ctx *RuntimeContext, cursor, depth int64, p unsafe.P
 	if neg {
 		i64 = -i64
 	}
+	if d.kind == reflect.Int64 {
+		*(*int64)(p) = i64
+		return next, nil
+	}
 	switch d.kind {
 	case reflect.Int8:
 		if i64 < -1*(1<<7) || (1<<7) <= i64 {

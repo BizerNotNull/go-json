@@ -19,8 +19,10 @@ type mapDecoder struct {
 	valuePtrType unsafe.Pointer
 	// isStringAnyMap is whether the map is a map[string]interface{}, which is decoded without reflect.
 	isStringAnyMap bool
-	keyDecoder     Decoder
-	valueDecoder   Decoder
+	// stringInt is map[string]int, decoded without reflect.
+	stringInt    bool
+	keyDecoder   Decoder
+	valueDecoder Decoder
 	// keyUnsupported is set for a map whose keys are not decoded ( see mapKeySupported ): an object is a type
 	// error.
 	keyUnsupported bool
@@ -48,6 +50,7 @@ func newMapDecoder(mapType reflect.Type, keyType reflect.Type, keyDec Decoder, v
 		keyPtrType:     ptrTypeOf(keyType),
 		valuePtrType:   ptrTypeOf(valueType),
 		isStringAnyMap: mapType == interfaceMapType,
+		stringInt:      mapType == mapStringIntType && valueType.Size() == 8,
 		valueDecoder:   valueDec,
 		keyUnsupported: !mapKeySupported(keyType, keyDec),
 		structName:     structName,
@@ -140,6 +143,78 @@ func (d *mapDecoder) decodeOther(ctx *RuntimeContext, cursor, depth int64) (int6
 	return 0, errors.ErrExpected("{ character for map value", cursor)
 }
 
+var mapStringIntType = reflect.TypeOf(map[string]int(nil))
+
+// tryMapStringInt decodes a compact map[string]int. It writes nothing and returns false when the object is not
+// a short list of plain strings and integers, so Decode handles it.
+func tryMapStringInt(ctx *RuntimeContext, cursor int64, p unsafe.Pointer) (int64, error, bool) {
+	buf := ctx.Buf
+	cursor++ // '{'
+	cursor = skipWhiteSpace(buf, cursor)
+	if buf[cursor] == '}' {
+		m := *(*map[string]int)(p)
+		if m == nil {
+			m = map[string]int{}
+		}
+		*(*map[string]int)(p) = m
+		return cursor + 1, nil, true
+	}
+	var keys [8]string
+	var vals [8]int
+	n := 0
+	for {
+		if buf[cursor] != '"' {
+			return 0, nil, false
+		}
+		end := plainStringEnd(buf, cursor+1)
+		if end < 0 || n == len(keys) {
+			return 0, nil, false
+		}
+		keys[n] = ctx.makeString(buf[cursor+1 : end])
+		cursor = end + 1
+		if buf[cursor] != ':' {
+			return 0, nil, false
+		}
+		cursor = skipWhiteSpace(buf, cursor+1)
+		neg := buf[cursor] == '-'
+		dig := cursor
+		if neg {
+			dig++
+		}
+		if buf[dig]-'0' > 9 {
+			return 0, nil, false
+		}
+		u, next, digits := parseDigits(buf, dig)
+		if isFloatContinuation(buf[next]) || digits > maxUint64Digits || (neg && u > 1<<63) || (!neg && u > 1<<63-1) || (buf[dig] == '0' && buf[next]-'0' <= 9) {
+			return 0, nil, false
+		}
+		v := int(u)
+		if neg {
+			v = -v
+		}
+		vals[n] = v
+		n++
+		cursor = skipWhiteSpace(buf, next)
+		switch buf[cursor] {
+		case ',':
+			cursor = skipWhiteSpace(buf, cursor+1)
+			continue
+		case '}':
+			m := *(*map[string]int)(p)
+			if m == nil {
+				m = make(map[string]int, n)
+			}
+			for i := range n {
+				m[keys[i]] = vals[i]
+			}
+			*(*map[string]int)(p) = m
+			return cursor + 1, nil, true
+		default:
+			return 0, nil, false
+		}
+	}
+}
+
 func (d *mapDecoder) Decode(ctx *RuntimeContext, cursor, depth int64, p unsafe.Pointer) (int64, error) {
 	buf := ctx.Buf
 	cursor = skipWhiteSpace(buf, cursor)
@@ -182,6 +257,11 @@ func (d *mapDecoder) Decode(ctx *RuntimeContext, cursor, depth int64, p unsafe.P
 			return 0, err
 		}
 		return c, nil
+	}
+	if d.stringInt {
+		if c, err, ok := tryMapStringInt(ctx, cursor, p); ok {
+			return c, err
+		}
 	}
 	cursor++
 	cursor = skipWhiteSpace(buf, cursor)

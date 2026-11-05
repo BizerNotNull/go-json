@@ -16,6 +16,10 @@ type structFieldSet struct {
 	fieldIdx    int
 	key         string
 	keyLen      int64
+	// keyWord and keyMask include a short key and its closing quote in little-endian order.
+	// keyMask is 0 when matchNextKey must not try this field.
+	keyWord uint64
+	keyMask uint64
 	// err is the cause of the type error of a field promoted from an embedded pointer to an unexported struct, at
 	// offset, which can't be allocated: it is reported only when the pointer is nil ( see unsettable ).
 	err error
@@ -56,6 +60,14 @@ func (d *structDecoder) setFields(fields []*structFieldSet) {
 	d.keys = newStructKeys(fields)
 	indexByFolded := map[string]int{}
 	for _, field := range fields {
+		if n := len(field.key); n > 0 && n < 8 {
+			var w uint64
+			for i := range n {
+				w |= uint64(field.key[i]) << (8 * uint(i))
+			}
+			field.keyWord = w | uint64('"')<<(8*uint(n))
+			field.keyMask = ^uint64(0) >> (8 * uint(7-n))
+		}
 		folded := string(appendFoldedKey(nil, []byte(field.key)))
 		idx, exists := indexByFolded[folded]
 		if !exists {
@@ -98,10 +110,25 @@ func (d *structDecoder) Decode(ctx *RuntimeContext, cursor, depth int64, p unsaf
 		return d.decodeObjectFirstWin(ctx, cursor, depth, p)
 	}
 	disallowUnknownFields := (ctx.Option.Flags & DisallowUnknownFieldsOption) != 0
+	nextField := 0
 	for {
-		field, c, err := d.decodeKey(buf, cursor, disallowUnknownFields)
-		if err != nil {
-			return 0, err
+		var (
+			field *structFieldSet
+			c     int64
+			err   error
+		)
+		if nextField < len(d.fields) {
+			if end, ok := matchNextKey(buf, cursor, d.fields[nextField]); ok {
+				field = d.fields[nextField]
+				c = end
+				nextField++
+			}
+		}
+		if field == nil {
+			field, c, err = d.decodeKey(buf, cursor, disallowUnknownFields)
+			if err != nil {
+				return 0, err
+			}
 		}
 		if char(b, c) == ':' {
 			cursor = c + 1
@@ -124,7 +151,7 @@ func (d *structDecoder) Decode(ctx *RuntimeContext, cursor, depth int64, p unsaf
 				}
 				cursor = c
 			} else {
-				c, err := field.dec.Decode(ctx, cursor, depth, unsafe.Add(p, field.offset))
+				c, err = field.dec.Decode(ctx, cursor, depth, unsafe.Add(p, field.offset))
 				if err != nil {
 					return 0, err
 				}
@@ -136,6 +163,15 @@ func (d *structDecoder) Decode(ctx *RuntimeContext, cursor, depth int64, p unsaf
 				return 0, err
 			}
 			cursor = c
+		}
+		// Compact input, which most input is, has the separator right after the value: only another byte
+		// takes the whitespace scan.
+		if c := buf[cursor]; c == ',' {
+			cursor++
+			continue
+		} else if c == '}' {
+			cursor++
+			return cursor, nil
 		}
 		cursor = skipWhiteSpace(buf, cursor)
 		if char(b, cursor) == '}' {
@@ -276,6 +312,23 @@ func (d *structDecoder) unsettableField(ctx *RuntimeContext, cursor, depth int64
 
 func (d *structDecoder) DecodePath(ctx *RuntimeContext, cursor, depth int64) ([][]byte, int64, error) {
 	return nil, 0, fmt.Errorf("json: struct decoder does not support decode path")
+}
+
+// matchNextKey reports whether the object key at cursor is f's key, and the position after its quote.
+// Only a key shorter than 8 bytes is tried. A different key is left to decodeKey.
+func matchNextKey(buf []byte, cursor int64, f *structFieldSet) (int64, bool) {
+	if f.keyMask == 0 || buf[cursor] != '"' {
+		return 0, false
+	}
+	start := cursor + 1
+	if start+8 > int64(cap(buf)) || start+f.keyLen >= int64(len(buf)) {
+		return 0, false
+	}
+	if load64(buf, start)&f.keyMask != f.keyWord {
+		return 0, false
+	}
+	end := start + f.keyLen
+	return end + 1, true
 }
 
 // decodeKey reads the key of an object at cursor, and returns its field or nil, and the position after it.

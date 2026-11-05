@@ -180,6 +180,167 @@ func (d *sliceDecoder) store(dst *sliceHeader, buf *sliceBuf, n int) {
 }
 
 func (d *sliceDecoder) Decode(ctx *RuntimeContext, cursor, depth int64, p unsafe.Pointer) (int64, error) {
+	if dec, ok := d.valueDecoder.(*intDecoder); ok && dec.kind == reflect.Int64 && d.size == 8 {
+		if c, err, ok := d.tryFlatInt64s(ctx, cursor, depth, p); ok {
+			return c, err
+		}
+	}
+	return d.decode(ctx, cursor, depth, p)
+}
+
+// tryFlatInt64s decodes a flat array of integers which fit in int64, into one array of their length.
+// Anything else is left to decode, which it does not run: it writes the slice only when the array is such.
+func (d *sliceDecoder) tryFlatInt64s(ctx *RuntimeContext, cursor, depth int64, p unsafe.Pointer) (int64, error, bool) {
+	buf := ctx.Buf
+	cursor = skipWhiteSpace(buf, cursor)
+	if buf[cursor] != '[' {
+		return 0, nil, false
+	}
+	depth++
+	if depth > maxDecodeNestingDepth {
+		return 0, errors.ErrExceededMaxDepth(buf[cursor], cursor), true
+	}
+	cursor++
+	cursor = skipWhiteSpace(buf, cursor)
+	dst := (*sliceHeader)(p)
+	if buf[cursor] == ']' {
+		if dst.data == nil {
+			dst.data = unsafe.Pointer(&zeroBase)
+		} else {
+			dst.len = 0
+		}
+		return cursor + 1, nil, true
+	}
+	// Existing storage must be filled before growing, and its values survive type errors.
+	// The general decoder preserves both the backing-array aliases and those old elements.
+	if dst.cap != 0 {
+		return 0, nil, false
+	}
+	if _, end, ok := parseFlatInt64sStack(buf, cursor, dst); ok {
+		return end, nil, true
+	}
+	return d.fillCountedInt64s(buf, cursor, dst)
+}
+
+// flatInt64Stack is the longest flat int64 array parsed in one pass on the stack.
+// A longer one is counted, then allocated once ( see fillCountedInt64s ).
+const flatInt64Stack = 256
+
+// parseFlatInt64sStack parses a flat array that fits in the stack into dst.
+// It returns false without writing dst when the array is longer or not a flat int64 array.
+func parseFlatInt64sStack(buf []byte, cursor int64, dst *sliceHeader) (int, int64, bool) {
+	var stack [flatInt64Stack]int64
+	n := 0
+	for {
+		cursor = skipWhiteSpace(buf, cursor)
+		neg := buf[cursor] == '-'
+		dig := cursor
+		if neg {
+			dig++
+		}
+		if buf[dig]-'0' > 9 {
+			return 0, 0, false
+		}
+		if n == flatInt64Stack {
+			return 0, 0, false
+		}
+		u, next, digits := parseDigits(buf, dig)
+		if isFloatContinuation(buf[next]) || digits > maxUint64Digits || (neg && u > 1<<63) || (!neg && u > 1<<63-1) {
+			return 0, 0, false
+		}
+		if buf[dig] == '0' && buf[next]-'0' <= 9 {
+			return 0, 0, false
+		}
+		v := int64(u)
+		if neg {
+			v = -v
+		}
+		stack[n] = v
+		n++
+		cursor = skipWhiteSpace(buf, next)
+		switch buf[cursor] {
+		case ',':
+			cursor++
+			continue
+		case ']':
+			s := make([]int64, n)
+			copy(s, stack[:n])
+			*dst = *(*sliceHeader)(unsafe.Pointer(&s))
+			return n, cursor + 1, true
+		default:
+			return 0, 0, false
+		}
+	}
+}
+
+func (d *sliceDecoder) fillCountedInt64s(buf []byte, cursor int64, dst *sliceHeader) (int64, error, bool) {
+	n, end, ok := countFlatInt64s(buf, cursor)
+	if !ok {
+		return 0, nil, false
+	}
+	s := make([]int64, n)
+	*dst = *(*sliceHeader)(unsafe.Pointer(&s))
+	elem := dst.data
+	for i := range n {
+		cursor = skipWhiteSpace(buf, cursor)
+		neg := buf[cursor] == '-'
+		if neg {
+			cursor++
+		}
+		u, next, digits := parseDigits(buf, cursor)
+		if isFloatContinuation(buf[next]) || digits > maxUint64Digits || (neg && u > 1<<63) || (!neg && u > 1<<63-1) {
+			return 0, nil, false
+		}
+		v := int64(u)
+		if neg {
+			v = -v
+		}
+		*(*int64)(unsafe.Add(elem, uintptr(i)*8)) = v
+		cursor = skipWhiteSpace(buf, next)
+		if i+1 < n {
+			cursor++
+		}
+	}
+	return end, nil, true
+}
+
+// countFlatInt64s counts a flat array of integers from its first element and returns the position after ']'.
+// A float, a leading zero, or any other value is not counted: decode handles it.
+func countFlatInt64s(buf []byte, cursor int64) (int, int64, bool) {
+	n := 0
+	for {
+		cursor = skipWhiteSpace(buf, cursor)
+		if buf[cursor] == '-' {
+			cursor++
+		}
+		if buf[cursor]-'0' > 9 {
+			return 0, 0, false
+		}
+		if buf[cursor] == '0' {
+			cursor++
+		} else {
+			for buf[cursor]-'0' <= 9 {
+				cursor++
+			}
+		}
+		if isFloatContinuation(buf[cursor]) {
+			return 0, 0, false
+		}
+		n++
+		cursor = skipWhiteSpace(buf, cursor)
+		switch buf[cursor] {
+		case ',':
+			cursor++
+			continue
+		case ']':
+			return n, cursor + 1, true
+		default:
+			return 0, 0, false
+		}
+	}
+}
+
+func (d *sliceDecoder) decode(ctx *RuntimeContext, cursor, depth int64, p unsafe.Pointer) (int64, error) {
 	buf := ctx.Buf
 	for {
 		switch buf[cursor] {
@@ -215,17 +376,29 @@ func (d *sliceDecoder) Decode(ctx *RuntimeContext, cursor, depth int64, p unsafe
 			// decoded into, the ones after its length too, as encoding/json does. The elements beyond its capacity
 			// and inPlaceSliceLength are decoded into a buffer ( see decodeLong ).
 			limit := max(dst.cap, inPlaceSliceLength)
+			have := dst.cap
 			idx := 0
 			for {
 				if idx == limit {
 					return d.decodeLong(ctx, cursor, depth, dst, idx)
 				}
-				d.grow(dst, idx, idx+1)
+				if idx >= have {
+					d.grow(dst, idx, idx+1)
+					have = dst.cap
+				}
 				ep := unsafe.Add(dst.data, uintptr(idx)*d.size)
 				c, err := d.valueDecoder.Decode(ctx, cursor, depth, ep)
 				if err != nil {
 					dst.len = idx + 1
 					return 0, err
+				}
+				if sep := buf[c]; sep == ']' {
+					dst.len = idx + 1
+					return c + 1, nil
+				} else if sep == ',' {
+					idx++
+					cursor = c + 1
+					continue
 				}
 				cursor = skipWhiteSpace(buf, c)
 				switch buf[cursor] {
